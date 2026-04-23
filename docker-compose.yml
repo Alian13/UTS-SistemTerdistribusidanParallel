@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  aggregator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: log-aggregator
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    environment:
+      - LOG_LEVEL=INFO
+    networks:
+      - aggregator-network
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8080/')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
+  publisher:
+    build:
+      context: .
+      dockerfile: Dockerfile.publisher
+    container_name: test-publisher
+    depends_on:
+      aggregator:
+        condition: service_healthy
+    environment:
+      - AGGREGATOR_HOST=http://aggregator:8080
+      - NUM_EVENTS=1000
+      - DUPLICATE_RATE=0.2
+    networks:
+      - aggregator-network
+    volumes:
+      - ./data:/app/data
+
+networks:
+  aggregator-network:
+    driver: bridge

@@ -1,0 +1,16 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+RUN adduser --disabled-password --gecos '' appuser && \
+    chown -R appuser:appuser /app
+
+COPY requirements.txt ./
+RUN pip install --no-cache-dir -r requirements.txt requests
+
+COPY src/ ./src/
+COPY publisher.py ./
+
+USER appuser
+
+CMD ["python", "publisher.py"]
