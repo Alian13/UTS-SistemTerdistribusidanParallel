@@ -46,7 +46,6 @@ Alur data:
 2. Run container:
    ```bash
    docker run -p 8080:8080 uts-aggregator
-   docker run --name tes-uts -p 8080:8080 -v /d/KULIAH/SISTER/UTS/data:/app/data uts-aggregator
    ```
    Command ini menjalankan container dan memetakan port 8080 host ke port 8080 container.
 
