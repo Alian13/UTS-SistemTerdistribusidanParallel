@@ -1,3 +1,4 @@
+import os
 import sqlite3
 import logging
 from pathlib import Path
@@ -8,9 +9,18 @@ import json
 logger = logging.getLogger(__name__)
 
 class DeduplicationStore:
-    def __init__(self, db_path: str = "data/dedup.db"):
-        self.db_path = db_path
-        Path(db_path).parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, db_path: Optional[str] = None):
+        # Use explicit absolute path in container so the DB always lands under /app/data
+        if db_path is None:
+            db_path = "/app/data/dedup.db"
+
+        self.db_path = os.path.abspath(db_path)
+        data_dir = Path(self.db_path).parent
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+        logger.info(f"Deduplication database path resolved to {self.db_path}")
+        logger.debug(f"Working directory: {os.getcwd()}")
+
         self._init_db()
     
     def _init_db(self):

@@ -1,368 +1,148 @@
-# Log Aggregator - Pub-Sub dengan Idempotent Consumer
+# Pub-Sub Log Aggregator dengan Idempotent Consumer dan Deduplication
 
-Sistem log aggregator berbasis Python dengan architecture Pub-Sub yang menerapkan idempotency dan deduplication untuk menjamin konsistensi event processing.
+Sistem log aggregator berbasis Python yang menggunakan arsitektur publish-subscribe untuk mengumpulkan dan memproses event log secara efisien. Sistem ini dirancang untuk menangani event dari multiple publisher secara concurrent, dengan fitur idempotency untuk mencegah pemrosesan duplikasi dan deduplication untuk menjamin konsistensi data, serta mendukung at-least-once delivery semantics.
 
-## Fitur Utama
+## Arsitektur Sistem
 
-- **Publish-Subscribe Pattern**: Asynchronous event publishing dengan internal queue
-- **Idempotent Consumer**: Event dengan (topic, event_id) yang sama hanya diproses sekali
-- **Persistent Deduplication**: SQLite-based dedup store yang tahan terhadap restart container
-- **At-Least-Once Delivery Semantics**: Simulasi duplikasi dengan consumer idempotency
-- **Real-time Statistics**: Tracking received, processed, duplicates, dan per-topic metrics
-- **FastAPI REST API**: Clean API untuk publish, query events, dan statistics
+Sistem ini terdiri dari komponen utama berikut:
 
-## Arsitektur
+- **Publisher**: Client eksternal yang mengirim event melalui HTTP POST
+- **API Gateway**: Endpoint FastAPI yang menerima dan memvalidasi event
+- **Async Queue**: Buffer in-memory untuk decoupling publisher dan consumer
+- **Idempotent Consumer**: Background task yang memproses event dengan cek duplikasi
+- **Dedup Store**: Database SQLite untuk penyimpanan persistent event unik
+
+Alur data:
+1. Publisher mengirim event ke POST /publish
+2. Event divalidasi dan dimasukkan ke async queue
+3. Consumer mengambil event dari queue
+4. Consumer cek apakah event duplikat
+5. Jika unik, event disimpan ke dedup store
+6. Statistics diperbarui secara real-time
 
 ```
-┌─────────────────────────────────────────────────┐
-│         Publisher (HTTP Client)                  │
-│         POST /publish (batch events)             │
-└────────────┬────────────────────────────────────┘
-             │
-             ▼
-┌─────────────────────────────────────────────────┐
-│              FastAPI Application                │
-├─────────────────────────────────────────────────┤
-│  • Event Validation (Pydantic)                  │
-│  • Async Queue (asyncio.Queue)                  │
-│  • Statistics Tracking                          │
-└────────┬─────────────────────────────┬──────────┘
-         │                             │
-         ▼                             ▼
-    Async Queue              GET /events, /stats
-         │
-         ▼
-┌──────────────────────────┐
-│  Idempotent Consumer     │
-│  (Async Processing)      │
-└────────┬─────────────────┘
-         │
-         ▼
-┌──────────────────────────┐
-│  Dedup Store (SQLite)    │
-│  • is_duplicate() check  │
-│  • store_event()         │
-│  • Persistent storage    │
-└──────────────────────────┘
+[Publisher] → POST /publish → [FastAPI] → [Queue] → [Consumer] → [Dedup Store]
 ```
 
-## Endpoints
+## Teknologi yang Digunakan
 
-### 1. Health Check
-```
-GET /
-Response: {"status": "ok", "service": "Log Aggregator", "version": "1.0.0"}
-```
+- **Python 3.11**: Bahasa pemrograman utama
+- **FastAPI**: Framework web untuk REST API dengan async support
+- **SQLite**: Database embedded untuk persistent deduplication
+- **Pydantic**: Library untuk validasi dan serialisasi data
+- **asyncio**: Library untuk asynchronous programming
+- **Docker**: Containerization untuk deployment yang konsisten
 
-### 2. Publish Events
-```
-POST /publish
-Content-Type: application/json
+## Cara Menjalankan Aplikasi
 
-Request Body (single event):
+### Menggunakan Docker
+
+1. Build image:
+   ```bash
+   docker build -t uts-aggregator .
+   ```
+   Command ini membuat Docker image bernama `uts-aggregator` dari Dockerfile.
+
+2. Run container:
+   ```bash
+   docker run -p 8080:8080 uts-aggregator
+   docker run --name tes-uts -p 8080:8080 -v /d/KULIAH/SISTER/UTS/data:/app/data uts-aggregator
+   ```
+   Command ini menjalankan container dan memetakan port 8080 host ke port 8080 container.
+
+Aplikasi akan berjalan di `http://localhost:8080`.
+
+## Endpoint API
+
+### POST /publish
+Mengirim event baru untuk diproses.
+- **Input**: JSON array atau object event
+- **Output**: Status accepted dengan count dan queue size
+
+### GET /events
+Mengambil event yang sudah diproses.
+- **Parameter**: `topic` (optional) untuk filter per topic
+- **Output**: List event dengan metadata
+
+### GET /stats
+Mendapatkan statistik sistem real-time.
+- **Output**: Metrics received, processed, duplicates, uptime, dll.
+
+## Contoh Request
+
+### Event JSON Format
+```json
 {
   "topic": "orders",
-  "event_id": "order-123",
-  "timestamp": "2024-04-21T10:30:00",
+  "event_id": "order-123-v1",
+  "timestamp": "2024-04-21T10:30:00Z",
   "source": "order-service",
-  "payload": {"order_id": "123", "amount": 500}
-}
-
-Request Body (batch events):
-[{...}, {...}]
-
-Response:
-{
-  "status": "accepted",
-  "count": 10,
-  "queue_size": 45
+  "payload": {
+    "order_id": "12345",
+    "amount": 500.00,
+    "currency": "USD"
+  }
 }
 ```
 
-### 3. Get Processed Events
-```
-GET /events?topic=orders
-
-Response:
-{
-  "topic": "orders",
-  "count": 150,
-  "events": [
-    {
-      "topic": "orders",
-      "event_id": "order-123",
-      "timestamp": "2024-04-21T10:30:00",
-      "source": "order-service",
-      "payload": {...},
-      "processed_at": "2024-04-21T10:30:01.234567"
-    }
-  ]
-}
-
-GET /events (all events):
-Response:
-{
-  "total_events": 5000,
-  "topics": ["orders", "payments", "users"],
-  "events": [...]
-}
-```
-
-### 4. Get Statistics
-```
-GET /stats
-
-Response:
-{
-  "received": 5000,
-  "unique_processed": 4000,
-  "duplicate_dropped": 1000,
-  "topics": {"orders": 2000, "payments": 1500, "users": 500},
-  "uptime_seconds": 125.45,
-  "timestamp": "2024-04-21T10:35:00",
-  "store": {
-    "total_events_stored": 4000,
-    "unique_topics": 3
-  },
-  "queue_size": 0
-}
-```
-
-## Build & Run
-
-### Docker (Recommended)
-
+### POST /publish Example
 ```bash
-# Build image
-docker build -t log-aggregator:latest .
-
-# Run container
-docker run -p 8080:8080 -v $(pwd)/data:/app/data log-aggregator:latest
-
-# Check health
-curl http://localhost:8080/
-
-# Publish events
 curl -X POST http://localhost:8080/publish \
   -H "Content-Type: application/json" \
-  -d '[
-    {"topic": "orders", "event_id": "evt-1", "timestamp": "2024-04-21T10:30:00", "source": "app", "payload": {"order": 1}},
-    {"topic": "orders", "event_id": "evt-1", "timestamp": "2024-04-21T10:30:00", "source": "app", "payload": {"order": 1}}
-  ]'
-
-# Check stats
-curl http://localhost:8080/stats
+  -d '{
+    "topic": "orders",
+    "event_id": "order-123",
+    "timestamp": "2024-04-21T10:30:00Z",
+    "source": "order-service",
+    "payload": {"order_id": "123", "amount": 500}
+  }'
 ```
 
-### Docker Compose (Bonus)
+## Idempotency dan Deduplication
 
+Sistem mencegah duplikasi event menggunakan composite key `(topic, event_id)`. Setiap event diperiksa sebelum disimpan; jika sudah ada, event diabaikan dan dicatat sebagai duplicate. Hal ini menjamin konsistensi meskipun terjadi duplicate delivery dari publisher.
+
+## Delivery Semantics
+
+Sistem menggunakan at-least-once delivery semantics, yang berarti event mungkin dikirim lebih dari sekali akibat retry atau failure. Namun, dengan idempotent consumer, event hanya diproses sekali, sehingga efek akhir sama dengan exactly-once.
+
+## Pengujian
+
+Sistem memiliki unit test menggunakan pytest untuk:
+- Deduplication: Validasi event unik dan duplicate
+- Persistensi: Dedup store survive restart
+- Endpoint: API response validation
+
+Jalankan test dengan:
 ```bash
-# Build dan run both aggregator dan test publisher
-docker-compose up --build
-
-# Check logs
-docker-compose logs -f aggregator
-docker-compose logs -f publisher
-
-# Stop
-docker-compose down
-```
-
-### Local Development
-
-```bash
-# Setup virtual environment
-python -m venv .venv
-source .venv/Scripts/activate  # Windows: .venv\Scripts\activate
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Run server
-uvicorn src.main:app --reload --host 0.0.0.0 --port 8080
-
-# Run tests
 pytest tests/test_aggregator.py -v
-
-# Run publisher for testing
-python publisher.py
 ```
-
-## Unit Tests
-
-```bash
-# Run all tests (7 test cases)
-pytest tests/test_aggregator.py -v
-
-# Run specific test
-pytest tests/test_aggregator.py::test_dedup_single_event -v
-
-# Run with coverage
-pytest tests/test_aggregator.py --cov=src --cov-report=html
-```
-
-### Test Cases Coverage
-
-1. **test_dedup_single_event**: Validasi dedup - event dikirim 1x, diproses 1x
-2. **test_dedup_multiple_duplicates**: Event dikirim 3x, hanya 1x diproses (2x di-reject)
-3. **test_dedup_store_persistence**: Setelah restart (new DB instance), dedup tetap efektif
-4. **test_event_schema_validation**: Schema validation untuk Event model
-5. **test_event_schema_timestamp_iso8601**: Timestamp harus ISO8601 format
-6. **test_stats_consistency**: GET /stats valid (received = unique_processed + duplicate_dropped)
-7. **test_stats_topics_counter**: Per-topic counter accurate
-8. **test_get_events_by_topic**: GET /events by topic konsisten
-9. **test_stress_large_batch**: Stress test 5000+ events dengan 20% duplikasi
-10. **test_consumer_idempotency**: Consumer idempotency verification
-
-## Desain Keputusan
-
-### 1. Deduplication Strategy
-
-**Key**: Composite unique key `(topic, event_id)`
-- Event dengan topic+event_id yang sama = duplikat
-- Disimpan di SQLite dengan UNIQUE constraint
-- Deterministik dan reproducible
-
-**Benefit**:
-- Konsisten across restart
-- Atomic pada database level
-- Mudah di-query
-
-### 2. Idempotent Consumer
-
-**Strategy**: Check sebelum insert
-```python
-if not is_duplicate(topic, event_id):
-    store_event(...)
-    record_processed()
-else:
-    record_duplicate()
-```
-
-**At-Least-Once Delivery**:
-- Publisher bisa mengirim event berkali-kali
-- Consumer guarantee: process hanya 1x
-- Retry-safe: event yang gagal bisa dikirim ulang
-
-### 3. Persistent Dedup Store
-
-**Technology**: SQLite embedded database
-```sql
-CREATE TABLE processed_events (
-    topic TEXT NOT NULL,
-    event_id TEXT NOT NULL,
-    UNIQUE(topic, event_id)
-)
-```
-
-**Advantages**:
-- No external dependencies
-- ACID compliance
-- Tahan crash/restart
-- Performa O(1) lookup
-
-### 4. Ordering & Consistency
-
-**Temporal Ordering**:
-- Event timestamp: publisher-provided (ISO8601)
-- processed_at: server-provided (ordering di consumer)
-- Per-topic ordering: via `processed_at` DESC
-
-**Eventual Consistency**:
-- In-process: consumer memproses queue sequentially
-- At-rest: dedup store guarantees no duplicate at rest state
-- Consumer start → queue process → dedup store write (all atomic)
-
-### 5. Queue-Based Architecture
-
-**In-Memory Queue**: `asyncio.Queue(maxsize=10000)`
-- Decouples publisher dari consumer
-- Publisher: O(1) put (non-blocking)
-- Consumer: async processing di background
-
-**Rationale**:
-- Scalable: async I/O tidak block
-- Fail-safe: queue lost on restart (OK, dupdup store persists)
-- Simple: no external message broker needed
-
-## Performance Metrics
-
-Tested pada:
-- 5000 events dengan 20% duplikasi (1000 unique, 4000 duplicate)
-- Throughput: ~500+ events/sec
-- Memory: < 100MB
-- Processing time: < 10 seconds
-
-## Failure Modes & Mitigations
-
-| Failure | Impact | Mitigation |
-|---------|--------|-----------|
-| **Duplicate Event** | Consumer process 2x | Dedup store check before insert |
-| **Container Crash** | Queue lost, events may be reprocessed | Dedup store persists on restart |
-| **Out-of-Order Events** | Topics may have mixed orders | Per-topic ordering via timestamp |
-| **Full Queue** | New events rejected | Batch publishing + monitoring |
-| **DB Corruption** | Cannot guarantee dedup | SQLITE ACID + transaction |
-
-## Technologies
-
-- **Framework**: FastAPI 0.104.1
-- **Async Runtime**: asyncio
-- **Validation**: Pydantic 2.5.0
-- **Database**: SQLite3 (embedded)
-- **Testing**: pytest 7.4.3
-- **Server**: Uvicorn 0.24.0
-- **Container**: Docker
 
 ## Struktur Project
 
 ```
 .
 ├── src/
-│   ├── __init__.py
-│   ├── main.py              # FastAPI application
-│   ├── models.py            # Event pydantic model
-│   ├── queue.py             # Async queue
-│   ├── consumer.py          # Idempotent consumer
-│   ├── storage.py           # SQLite dedup store
-│   └── stats.py             # Statistics tracker
+│   ├── main.py          # FastAPI app dan endpoints
+│   ├── models.py        # Event model (Pydantic)
+│   ├── queue.py         # Async queue implementation
+│   ├── consumer.py      # Idempotent consumer logic
+│   ├── storage.py       # SQLite dedup store
+│   └── stats.py         # Statistics tracking
 ├── tests/
-│   ├── __init__.py
-│   └── test_aggregator.py   # 10 unit tests
-├── Dockerfile
-├── Dockerfile.publisher     # For docker-compose bonus
-├── docker-compose.yml       # Bonus: 2 services
-├── requirements.txt
-├── publisher.py             # Test publisher script
-└── README.md
+│   └── test_aggregator.py  # Unit tests
+├── Dockerfile          # Container config
+├── requirements.txt    # Python dependencies
+└── README.md           # Dokumentasi ini
 ```
 
-## References & Sitasi
+## Video Demo
 
-Untuk laporan teori (T1-T8), referensi ke:
-- Tanenbaum, A. S., & Van Steen, M. (2007). Distributed systems: Principles and paradigms (2nd ed.). Pearson Education. [Bab 1-7]
+Video demo sistem tersedia di YouTube: 
 
-## Demo Video
+## Catatan dan Asumsi
 
-Video demo tersedia di YouTube (link di laporan PDF/MD).
-
-## Maintenance & Troubleshooting
-
-### Database Grows Too Large
-```bash
-# Clear old events (dalam container)
-python -c "from src.storage import dedup_store; dedup_store.clear()"
-```
-
-### Queue Full
-- Reduce batch size di publisher
-- Increase queue maxsize di queue.py
-- Monitor /stats endpoint
-
-### Performance Issues
-- Check CPU/Memory usage: `docker stats`
-- Check logs: `docker logs log-aggregator`
-- Run tests untuk benchmark
-
-## License
-
-MIT
+- Deduplication berdasarkan kombinasi `(topic, event_id)` yang unik global
+- Sistem berjalan lokal dalam Docker tanpa external service
+- Event timestamp menggunakan format ISO8601
+- Queue size terbatas untuk mencegah memory exhaustion

@@ -19,22 +19,22 @@ class IdempotentConsumer:
             try:
                 event = await asyncio.wait_for(self.queue.get(), timeout=1.0)
                 
-                if dedup_store.is_duplicate(event.topic, event.event_id):
-                    logger.info(f"Duplicate detected: topic={event.topic}, event_id={event.event_id}")
-                    stats_tracker.record_duplicate()
+                # 🔥 FIX: gunakan INSERT langsung (atomic dedup)
+                success = dedup_store.store_event(
+                    topic=event.topic,
+                    event_id=event.event_id,
+                    timestamp=event.timestamp.isoformat(),
+                    source=event.source,
+                    payload=event.payload
+                )
+                
+                if success:
+                    stats_tracker.record_processed(event.topic)
+                    logger.info(f"Event processed: topic={event.topic}, event_id={event.event_id}")
                 else:
-                    success = dedup_store.store_event(
-                        topic=event.topic,
-                        event_id=event.event_id,
-                        timestamp=event.timestamp.isoformat(),
-                        source=event.source,
-                        payload=event.payload
-                    )
-                    
-                    if success:
-                        logger.info(f"Event processed: topic={event.topic}, event_id={event.event_id}")
-                        stats_tracker.record_processed(event.topic)
-                    
+                    stats_tracker.record_duplicate()
+                    logger.info(f"Duplicate detected: topic={event.topic}, event_id={event.event_id}")
+                
                 self.queue.task_done()
                 
             except asyncio.TimeoutError:

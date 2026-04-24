@@ -3,8 +3,9 @@ FROM python:3.11-slim
 # Set working directory
 WORKDIR /app
 
-# Create non-root user
-RUN adduser --disabled-password --gecos '' appuser && \
+# Create application data directory and non-root user
+RUN mkdir -p /app/data && \
+    adduser --disabled-password --gecos '' appuser && \
     chown -R appuser:appuser /app
 
 # Copy requirements and install dependencies
