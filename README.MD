@@ -137,7 +137,7 @@ pytest tests/test_aggregator.py -v
 
 ## Video Demo
 
-Video demo sistem tersedia di YouTube: 
+Video demo sistem tersedia di YouTube: https://youtu.be/IiouQWX5IK4
 
 ## Catatan dan Asumsi
 
